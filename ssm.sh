@@ -255,7 +255,6 @@ while read -r PARAM_STRING; do
 
           echo "adding \"${VALUE}\" to NEW_CONFIG_VALUE"
           NEW_CONFIG_VALUE+="${VALUE}"
-          #MERGED_TEXT=$(echo -e "${MERGED_TEXT}" | sed "s|${PARAM_STRING}|${SECRET_TEXT}|g") # do merged text after we get the key/values from contexts!
 
         fi
       done <<< "${PARAM_PATH_OUTPUT}"
@@ -264,13 +263,9 @@ while read -r PARAM_STRING; do
     echo "new config value:"
     echo $NEW_CONFIG_VALUE
 
-done <<< "${PARAMETERS}"
+    MERGED_TEXT=$(echo -e "${MERGED_TEXT}" | sed "s|${PARAM_STRING}|${NEW_CONFIG_VALUE}|g" | sed "s|\"||g") # do merged text after we get the key/values from contexts!
 
-# so we will have something that looks like this:
-# chassis:
-#   app:
-#     ssm:
-#       config: "jessica_first_context,jessica_second_context"
+done <<< "${PARAMETERS}"
 
 set +e
 # echo the merged text, which now has the values coming from ssm, and run helm command using that as the values.
