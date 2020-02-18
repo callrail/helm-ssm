@@ -112,7 +112,7 @@ done
 echo -e "${GREEN}[SSM]${NOC} Options: ${OPTIONS[@]}"
 echo -e "${GREEN}[SSM]${NOC} Value files: ${VALUE_FILES[@]}"
 
-set +e # we disable fail-dast because we want to give the user a proper error message in case we cant read the value file
+set +e # we disable fail-fast because we want to give the user a proper error message in case we cant read the value file
 MERGED_TEXT=""
 for FILEPATH in "${VALUE_FILES[@]}"; do
     echo -e "${GREEN}[SSM]${NOC} Reading ${FILEPATH}"
@@ -135,6 +135,8 @@ for FILEPATH in "${VALUE_FILES[@]}"; do
 done
 
 PARAMETERS=$(echo -e "${MERGED_TEXT}" | grep -Eo "\{\{ssm [^\}]+\}\}") # Look for {{ssm /path/to/param us-east-1}} patterns, delete empty lines
+#echo "${PARAMETERS}"
+#{{ssm /configmgmt-configs/yanky_staging_jessica_test us-east-1}}
 PARAMETERS_LENGTH=$(echo "${PARAMETERS}" | grep -v '^$' | wc -l | xargs)
 if [ "${PARAMETERS_LENGTH}" != 0 ]; then
     echo -e "${GREEN}[SSM]${NOC} Found $(echo "${PARAMETERS}" | grep -v '^$' | wc -l | xargs) parameters"
@@ -166,11 +168,112 @@ while read -r PARAM_STRING; do
     fi
 
     SECRET_TEXT="$(echo -e "${PARAM_OUTPUT}" | sed -e 's/[]\&\/$*.^[]/\\&/g')"
-    MERGED_TEXT=$(echo -e "${MERGED_TEXT}" | sed "s|${PARAM_STRING}|${SECRET_TEXT}|g")
+    #echo "$SECRET_TEXT"
+    #yanky_staging_jessica_test_context
+    # In merged text, replace {PARAM_STRING} with secret text.
+    #MERGED_TEXT=$(echo -e "${MERGED_TEXT}" | sed "s|${PARAM_STRING}|${SECRET_TEXT}|g") # do merged text after we get the key/values from contexts!
+    #echo "${MERGED_TEXT}"
+    #replicaCount: 1
+    # 
+    #image:
+    #  repository: nginx
+    #  tag: stable
+    #  pullPolicy: IfNotPresent
+    #
+    #nameOverride: ""
+    #fullnameOverride: ""
+    #
+    #secret: "yanky_staging_jessica_test_context"
+    #otherSecret: "{{ssm /configmgmt/jessica-test us-east-1}}"
+    
     sleep 0.5 # very basic rate limits
+    # TODO make it so we can get a value from anywhere, OR use contexts
+    # split the values into a list of contexts
+    CONTEXTS=$(echo $SECRET_TEXT | tr "," "\n")
+    
+    NEW_CONFIG_VALUE="{"
+    # for each context, get the paramters
+    for context in $CONTEXTS; do
+      # get parameters by path
+      PARAM_PATH_OUTPUT="$(aws ssm get-parameters-by-path --path "/configmgmt/${context}/" --with-decryption --recursive --output yaml --query Parameters --region ${REGION} $PROFILE_PARAM  2>&1)" # Get the parameter value or error message
+      EXIT_CODE=$?
+    
+      if [[ ${EXIT_CODE} -ne 0 ]]; then
+          echo -e "${RED}[SSM]${NOC} Error: Could not get parameters: /configmgmt/${context}/. AWS cli output: ${PARAM_PATH_OUTPUT}" >&2
+          exit 1
+      fi
+      # TODO next page
+      #echo "param path output for ${context}:"
+      #echo $PARAM_PATH_OUTPUT
+      # Looks like :
+      # arn:aws:ssm:us-east-1:256727351604:parameter/configmgmt/jessica_first_context/c1v1	1582048411.499	/configmgmt/jessica_first_context/c1v1	SecureString	hello	1
+      # arn:aws:ssm:us-east-1:256727351604:parameter/configmgmt/jessica_first_context/c1v2	1582048442.688	/configmgmt/jessica_first_context/c1v2	SecureString	12345	1
+
+      # YAML format looks like:
+      # - ARN: arn:aws:ssm:us-east-1:256727351604:parameter/configmgmt/jessica_first_context/c1v1
+      #  LastModifiedDate: '2020-02-18T12:53:31.499000-05:00'
+      #  Name: /configmgmt/jessica_first_context/c1v1
+      #  Type: SecureString
+      #  Value: hello
+      #  Version: 1
+      #- ARN: arn:aws:ssm:us-east-1:256727351604:parameter/configmgmt/jessica_first_context/c1v2
+      #  LastModifiedDate: '2020-02-18T12:54:02.688000-05:00'
+      #  Name: /configmgmt/jessica_first_context/c1v2
+      #  Type: SecureString
+      #  Value: '12345'
+      #  Version: 1
+
+      # what do we want our values file to look like?
+      # chassis:
+      #   app:
+      #     ssm:
+      #       config:
+      #         c1v1: hello
+      #         c1v2: 12345
+      #         c2v1: tanooki
+      #OR config: {civ1: hello, c1v2: 12345, c2v1: tanooki}
+      echo "param lines:"
+      while read -r line; do # use newline as delim, not space
+      #for line in $PARAM_PATH_OUTPUT; do
+        KEY=""
+        VALUE=""
+        if [[ $line =~ ^Name: ]]; then
+          words=$(echo $line | tr "/" "\n") # split on "/"
+          KEY=$(echo $words | awk '{print $4}')
+
+          if [[ $NEW_CONFIG_VALUE != "{" ]]; then
+            NEW_CONFIG_VALUE+=", "
+          fi
+          echo "adding \"${KEY}: \" to NEW_CONFIG_VALUE"
+          NEW_CONFIG_VALUE+="${KEY}: "
+          #MERGED_TEXT=$(echo -e "${MERGED_TEXT}" | sed "s|${PARAM_STRING}|${SECRET_TEXT}|g") # do merged text after we get the key/values from contexts!
+        fi
+        if [[ $line =~ ^Value: ]]; then
+          words=$(echo $line | tr " " "\n") # split on "/"
+          VALUE=$(echo $words | awk '{print $2}' | sed s/\'//g) # Take surrounding '' off numeric values
+          echo $VALUE
+
+          echo "adding \"${VALUE}\" to NEW_CONFIG_VALUE"
+          NEW_CONFIG_VALUE+="${VALUE}"
+          #MERGED_TEXT=$(echo -e "${MERGED_TEXT}" | sed "s|${PARAM_STRING}|${SECRET_TEXT}|g") # do merged text after we get the key/values from contexts!
+
+        fi
+      done <<< "${PARAM_PATH_OUTPUT}"
+    done
+    NEW_CONFIG_VALUE+="}"
+    echo "new config value:"
+    echo $NEW_CONFIG_VALUE
+
 done <<< "${PARAMETERS}"
 
+# so we will have something that looks like this:
+# chassis:
+#   app:
+#     ssm:
+#       config: "jessica_first_context,jessica_second_context"
+
 set +e
+# echo the merged text, which now has the values coming from ssm, and run helm command using that as the values.
 echo -e "${MERGED_TEXT}" | helm "${OPTIONS[@]}" --values -
 EXIT_CODE=$?
 if [[ ${EXIT_CODE} -ne 0 ]]; then
