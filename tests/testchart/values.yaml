@@ -8,6 +8,6 @@ image:
 nameOverride: ""
 fullnameOverride: ""
 
-secret: "{{ssm /test/parameter us-east-1}}"
+config: "{{ssm /configmgmt-configs/yanky_staging_jessica_test us-east-1}}"
 
 
