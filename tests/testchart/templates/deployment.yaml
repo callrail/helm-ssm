@@ -13,6 +13,10 @@ spec:
         - name: {{ .Chart.Name }}
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           env:
-            - name: A_VERY_SECRET_CONFIG
-              value: {{ .Values.config | quote }}
+            - name: A_VERY_SECRET_PASSWORD
+              value: {{ .Values.secret | quote }}
+            {{- range $key, $value := .Values.contexts }}
+            - name: {{ $key | upper }}
+              value: {{ tpl $value $ | quote }}
+            {{- end }}
 

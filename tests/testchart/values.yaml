@@ -8,6 +8,9 @@ image:
 nameOverride: ""
 fullnameOverride: ""
 
-config: "{{ssm /configmgmt-configs/yanky_staging_jessica_test us-east-1}}"
+secret: "{{ssm jessica-secret}}"
 
+contexts:
+- "{{ssm-path /configmgmt/jessica_first_context}}"
+- "{{ssm-path /configmgmt/jessica_second_context}}"
 
