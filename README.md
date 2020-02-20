@@ -18,6 +18,6 @@ $ helm plugin update ssm
 
 ## Testing
 ```
-$ go run main.go install testing ./tests/testchart/ -f tests/testchart/values.yaml --dry-run --debug
+$ go run main.go install testing ./tests/testchart/ -f tests/testchart/override-values.yaml --dry-run --debug
 ```
 

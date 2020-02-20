@@ -8,9 +8,7 @@ image:
 nameOverride: ""
 fullnameOverride: ""
 
-secret: "{{ssm jessica-secret}}"
+secret: secret-value
 
-contexts:
-- "{{ssm-path /configmgmt/jessica_first_context}}"
-- "{{ssm-path /configmgmt/jessica_second_context}}"
+config: going-to-override-this
 

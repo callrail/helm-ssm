@@ -1,0 +1,7 @@
+image:
+  repository: nginx
+  tag: stable
+  pullPolicy: IfNotPresent
+
+config: {{ssm-path /configmgmt/jessica_first_context}}
+
