@@ -141,7 +141,7 @@ func readLines(valueFile string) ([]string, error) {
 
 func (c *controller) findAndReplace(values []string) ([]string, error) {
 	newValues := []string{}
-	//reSSM := regexp.MustCompile(SSM_FORMAT)
+	reSSM := regexp.MustCompile(SSM_FORMAT)
 	reSSMPath := regexp.MustCompile(SSM_PATH_FORMAT)
 	for _, line := range values {
 		if reSSMPath.MatchString(line) {
@@ -156,12 +156,16 @@ func (c *controller) findAndReplace(values []string) ([]string, error) {
 				return nil, err
 			}
 			newValues = append(newValues, newLine)
-		//} else if reSSM.MatchString(line) {
-		//	paramSubmatch := reSSM.FindStringSubmatch(line)
-		//	if len(paramSubmatch) < 2 {
-		//		return nil, errors.New(fmt.Sprintf("format error in line %s", line))
-		//	}
-		//	c.replaceWithSSMParameter(paramSubmatch[1])
+		} else if reSSM.MatchString(line) {
+			paramSubmatch := reSSM.FindStringSubmatch(line)
+			if len(paramSubmatch) < 2 {
+				return nil, errors.New(fmt.Sprintf("format error in line %s", line))
+			}
+			newLine, err := c.replaceWithSSMParameter(line, paramSubmatch[1])
+			if err != nil {
+				return nil, err
+			}
+			newValues = append(newValues, newLine)
 		} else {
 			newValues = append(newValues, line)
 		}
@@ -169,10 +173,30 @@ func (c *controller) findAndReplace(values []string) ([]string, error) {
 	return newValues, nil
 }
 
-func (c *controller) replaceWithSSMParameter(path string) (string, error) {
-	//get the param
+func (c *controller) replaceWithSSMParameter(line string, path string) (string, error) {
+	// if awsClient is not yet initialized, initialize it
+	if c.awsClient == nil {
+		if err := c.initializeAWSClient(); err != nil {
+			return "", errors.Wrap(err, "error initializing AWS client")
+		}
+	}
+
+	param, err := c.awsClient.GetParameter(
+		&ssm.GetParameterInput{
+			Name: &path,
+			WithDecryption: aws.Bool(true),
+		},
+	)
+	if err != nil {
+		return "", errors.Wrapf(err, "error getting paramater %s from AWS", path)
+	}
 	
-	return "pass", nil
+	line, err = constructReplacementLine(line, *param.Parameter.Value)
+	if err != nil {
+		return "", err
+	}
+
+	return line, nil
 }
 
 func (c *controller) replaceWithSSMPath(line string, path string) (string, error) {
@@ -207,14 +231,20 @@ func (c *controller) replaceWithSSMPath(line string, path string) (string, error
 		return "", errors.Wrap(err, "error marshalling parameters into values")
 	}
 
+	line, err = constructReplacementLine(line, string(paramDict))
+	if err != nil {
+		return "", err
+	}
+	return line, nil
+}
+
+func constructReplacementLine(line, newValue string) (string, error) {
 	// contruct the new line for the values file. keep everything until and including the colon
 	colon := strings.Index(line, ":")
 	if (colon == -1) {
-		fmt.Println("in the error")
 		return "", errors.New(fmt.Sprintf("format error in line %s", line))
 	}
-	line = fmt.Sprintf("%s %s", line[:colon+1], string(paramDict))
-	return line, nil
+	return fmt.Sprintf("%s %s\n", line[:colon+1], newValue), nil
 }
 
 func checkForInstall(args []string, index int) bool {

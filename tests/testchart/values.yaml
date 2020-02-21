@@ -10,5 +10,3 @@ fullnameOverride: ""
 
 secret: secret-value
 
-config: going-to-override-this
-

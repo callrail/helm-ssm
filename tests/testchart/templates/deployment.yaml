@@ -19,4 +19,6 @@ spec:
             - name: {{ $key | upper }}
               value: {{ $value | quote }}
             {{- end }}
+            - name: SECRET_2
+              value: {{ .Values.secret2 | quote }}
 
