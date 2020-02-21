@@ -4,4 +4,5 @@ image:
   pullPolicy: IfNotPresent
 
 config: {{ssm-path /configmgmt/jessica_first_context}}
+secret2: {{ssm jessica-secret}}
 
