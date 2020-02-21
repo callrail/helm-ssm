@@ -34,7 +34,7 @@ func main() {
 	var install bool
 	if (len(args) < 1) {
 		install = false
-	} else if (args[0] == "-n" || args[0] == "--namespace") { // check if first arg is namespace flag
+	} else if (args[0] == "-n" || args[0] == "--namespace") { // order will be different if first arg is namespace flag
 		install = checkForInstall(args, 2)
 	} else {
 		install = checkForInstall(args, 0)
@@ -47,10 +47,7 @@ func main() {
 		os.Exit(0)
 	}
 
-	// Get the values files
 	valueFiles, newArgs := pullValueFiles(args)
-
-	// concatenate the values files
 	mergedValues, err := mergeValueFiles(valueFiles)
 	if err != nil {
 		fmt.Println(err)
@@ -58,15 +55,23 @@ func main() {
 	}
 
 	// find the lines that match ssm keywords, go get the values, and replace them
-	newValues, err := c.findAndReplace(mergedValues)
+	newValues, changed, err := c.findAndReplace(mergedValues)
 	if err != nil {
 		fmt.Println(err)
 		os.Exit(1)
 	}
 
-	if err := helmCommandWithNewValues(newValues, newArgs); err != nil {
-		fmt.Println(err)
-		os.Exit(1)
+	// if there was nothing replaced, no need to write a new temp values file
+	if !changed {
+		if err := helmCommand(args); err != nil {
+			fmt.Println(err)
+			os.Exit(1)
+		}
+	} else {
+		if err := helmCommandWithNewValues(newValues, newArgs); err != nil {
+			fmt.Println(err)
+			os.Exit(1)
+		}
 	}
 }
 
@@ -139,38 +144,42 @@ func readLines(valueFile string) ([]string, error) {
 	return lines, nil
 }
 
-func (c *controller) findAndReplace(values []string) ([]string, error) {
+// returns a slice of the new value lines, a bool indicating whether or not a replacement occured, and an error
+func (c *controller) findAndReplace(values []string) ([]string, bool, error) {
 	newValues := []string{}
+	var changed bool
 	reSSM := regexp.MustCompile(SSM_FORMAT)
 	reSSMPath := regexp.MustCompile(SSM_PATH_FORMAT)
 	for _, line := range values {
 		if reSSMPath.MatchString(line) {
+			changed = true
 			// extract the value of the paramater or path name
 			paramSubmatch := reSSMPath.FindStringSubmatch(line)
 			if len(paramSubmatch) < 2 {
-				return nil, errors.New(fmt.Sprintf("format error in line %s", line))
+				return nil, changed, errors.New(fmt.Sprintf("format error in line %s", line))
 			}
 
 			newLine, err := c.replaceWithSSMPath(line, paramSubmatch[1])
 			if err != nil {
-				return nil, err
+				return nil, changed, err
 			}
 			newValues = append(newValues, newLine)
 		} else if reSSM.MatchString(line) {
+			changed = true
 			paramSubmatch := reSSM.FindStringSubmatch(line)
 			if len(paramSubmatch) < 2 {
-				return nil, errors.New(fmt.Sprintf("format error in line %s", line))
+				return nil, changed, errors.New(fmt.Sprintf("format error in line %s", line))
 			}
 			newLine, err := c.replaceWithSSMParameter(line, paramSubmatch[1])
 			if err != nil {
-				return nil, err
+				return nil, changed, err
 			}
 			newValues = append(newValues, newLine)
 		} else {
 			newValues = append(newValues, line)
 		}
 	}
-	return newValues, nil
+	return newValues, changed, nil
 }
 
 func (c *controller) replaceWithSSMParameter(line string, path string) (string, error) {
@@ -200,14 +209,12 @@ func (c *controller) replaceWithSSMParameter(line string, path string) (string, 
 }
 
 func (c *controller) replaceWithSSMPath(line string, path string) (string, error) {
-	// if awsClient is not yet initialized, initialize it
 	if c.awsClient == nil {
 		if err := c.initializeAWSClient(); err != nil {
 			return "", errors.Wrap(err, "error initializing AWS client")
 		}
 	}
 
-	//get all parameters starting with that path
 	params := map[string]string{}
 	if err := c.awsClient.GetParametersByPathPages(
 		&ssm.GetParametersByPathInput{
@@ -273,7 +280,6 @@ func helmCommand(args []string) error {
 func helmCommandWithNewValues(values []string, args []string) error {
 	tempFile := fmt.Sprintf("%s-temp-values.yaml", time.Now().Format("20060102150405"))
 
-	// write temp file
 	f, err := os.OpenFile(tempFile,os.O_APPEND|os.O_CREATE|os.O_WRONLY,0644)
 	if err != nil {
 		return errors.Wrap(err, "error writing temp values file")
@@ -288,17 +294,14 @@ func helmCommandWithNewValues(values []string, args []string) error {
 	writer.Flush()
 	f.Close()
 
-	// helm command
 	args = append(args, "-f", tempFile)
 	if err = helmCommand(args); err != nil {
-		// delete the file
 		if deleteErr := os.Remove(tempFile); deleteErr != nil {
 			return errors.Wrapf(err, "error running helm command, and could not delete temp values file %s", tempFile)
 		}
 		return err
 	}
 
-	// delete the temp file
 	if err := os.Remove(tempFile); err != nil {
 		return errors.Wrapf(err, "error deleting temp values file %s", tempFile)
 	}
