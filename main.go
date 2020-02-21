@@ -2,7 +2,7 @@ package main
 
 import (
 	"bufio"
-	//"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -10,6 +10,10 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/credentials/stscreds"
+	"github.com/aws/aws-sdk-go/aws/session"
+	"github.com/aws/aws-sdk-go/service/ssm"
 	"github.com/pkg/errors"
 )
 
@@ -18,13 +22,13 @@ const (
 	SSM_PATH_FORMAT = `{{ssm-path\s+(\S+)\s?}}`
 )
 
-type ssmParams struct {
-	params []string
-	pathParams []string
+type controller struct {
+	awsClient *ssm.SSM
 }
 
 func main() {
 	args := os.Args[1:]
+	c := &controller{}
 
 	// if the command is not "install" or "upgrade", or just a single command (no value files is a given in this case), pass the args to the regular helm command
 	var install bool
@@ -54,7 +58,7 @@ func main() {
 	}
 
 	// find the lines that match ssm keywords, go get the values, and replace them
-	newValues, err := findAndReplace(mergedValues)
+	newValues, err := c.findAndReplace(mergedValues)
 	if err != nil {
 		fmt.Println(err)
 		os.Exit(1)
@@ -64,6 +68,19 @@ func main() {
 		fmt.Println(err)
 		os.Exit(1)
 	}
+}
+
+func (c *controller) initializeAWSClient() error {
+	sess, err := session.NewSessionWithOptions(session.Options{
+		AssumeRoleTokenProvider: stscreds.StdinTokenProvider,
+		SharedConfigState: session.SharedConfigEnable,
+		Config: aws.Config{},
+	})
+	if err != nil {
+		return err
+	}
+	c.awsClient = ssm.New(sess)
+	return nil
 }
 
 func pullValueFiles(args []string) ([]string, []string) {
@@ -122,7 +139,7 @@ func readLines(valueFile string) ([]string, error) {
 	return lines, nil
 }
 
-func findAndReplace(values []string) ([]string, error) {
+func (c *controller) findAndReplace(values []string) ([]string, error) {
 	newValues := []string{}
 	//reSSM := regexp.MustCompile(SSM_FORMAT)
 	reSSMPath := regexp.MustCompile(SSM_PATH_FORMAT)
@@ -134,7 +151,7 @@ func findAndReplace(values []string) ([]string, error) {
 				return nil, errors.New(fmt.Sprintf("format error in line %s", line))
 			}
 
-			newLine, err := replaceWithSSMPath(line, paramSubmatch[1])
+			newLine, err := c.replaceWithSSMPath(line, paramSubmatch[1])
 			if err != nil {
 				return nil, err
 			}
@@ -144,7 +161,7 @@ func findAndReplace(values []string) ([]string, error) {
 		//	if len(paramSubmatch) < 2 {
 		//		return nil, errors.New(fmt.Sprintf("format error in line %s", line))
 		//	}
-		//	replaceWithSSMParameter(paramSubmatch[1])
+		//	c.replaceWithSSMParameter(paramSubmatch[1])
 		} else {
 			newValues = append(newValues, line)
 		}
@@ -152,24 +169,51 @@ func findAndReplace(values []string) ([]string, error) {
 	return newValues, nil
 }
 
-func replaceWithSSMParameter(path string) (string, error) {
+func (c *controller) replaceWithSSMParameter(path string) (string, error) {
 	//get the param
 	
 	return "pass", nil
 }
 
-func replaceWithSSMPath(line string, path string) (string, error) {
-	//get all params starting with that path
-	//get their values
-	
-	valueFromSSM := "{c1v1: hello, c1v2: 12345, c2v1: tanooki}"
-	// want to keep the key from the line.
+func (c *controller) replaceWithSSMPath(line string, path string) (string, error) {
+	// if awsClient is not yet initialized, initialize it
+	if c.awsClient == nil {
+		if err := c.initializeAWSClient(); err != nil {
+			return "", errors.Wrap(err, "error initializing AWS client")
+		}
+	}
+
+	//get all parameters starting with that path
+	params := map[string]string{}
+	if err := c.awsClient.GetParametersByPathPages(
+		&ssm.GetParametersByPathInput{
+			Path: &path,
+			Recursive: aws.Bool(true),
+			WithDecryption: aws.Bool(true),
+		},
+		func(page *ssm.GetParametersByPathOutput, lastPage bool) bool {
+			for _, param := range page.Parameters {
+				key := (*param.Name)[len(path)+1:] // trim out the path
+				params[key] = *param.Value
+			}
+			return true
+		},
+	); err != nil {
+		return "", errors.Wrapf(err, "error getting paramaters from path %s from AWS", path)
+	}
+
+	paramDict, err := json.Marshal(params)
+	if err != nil {
+		return "", errors.Wrap(err, "error marshalling parameters into values")
+	}
+
+	// contruct the new line for the values file. keep everything until and including the colon
 	colon := strings.Index(line, ":")
 	if (colon == -1) {
 		fmt.Println("in the error")
 		return "", errors.New(fmt.Sprintf("format error in line %s", line))
 	}
-	line = line[:colon+1] + " " + valueFromSSM
+	line = fmt.Sprintf("%s %s", line[:colon+1], string(paramDict))
 	return line, nil
 }
 
@@ -198,7 +242,6 @@ func helmCommand(args []string) error {
 
 func helmCommandWithNewValues(values []string, args []string) error {
 	tempFile := fmt.Sprintf("%s-temp-values.yaml", time.Now().Format("20060102150405"))
-	fmt.Println("temp file name:", tempFile)
 
 	// write temp file
 	f, err := os.OpenFile(tempFile,os.O_APPEND|os.O_CREATE|os.O_WRONLY,0644)
