@@ -17,13 +17,15 @@ $ helm plugin update ssm
 ```
 
 ## Usage
-In any non-default values file, replace values of secrets with ssm keywords `ssm` and `ssm-path` as shown below.
+In any **non-default** values file, replace values of secrets with ssm keywords `ssm` and `ssm-path` as shown below.
 #### Single Parameter
 Replace a value-file value with a value from SSM Parameter Store:
 ```
 mySecret: {{ssm <my-ssm-parameter-name>}}
 ```
 Then run your helm install/update command as usual but with `helm ssm` instead of just `helm`.
+
+**Note:** You will need to run your helm command using the credentials with access to SSM in the correct AWS account (staging/prod). To set up aws-vault, follow the instructions in the aws-vault section [here](https://callrail.atlassian.net/wiki/spaces/ENG/pages/888865061/AWS+Setup).
 
 #### Multiple Parameters under a Single Path
 You can also include a map of key/value pairs by specifying a path that holds multiple parameters.
