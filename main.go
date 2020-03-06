@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
-	"strings"
 	"time"
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/credentials/stscreds"
@@ -151,26 +150,22 @@ func (c *controller) findAndReplace(values []string) ([]string, bool, error) {
 	reSSM := regexp.MustCompile(SSM_FORMAT)
 	reSSMPath := regexp.MustCompile(SSM_PATH_FORMAT)
 	for _, line := range values {
-		if reSSMPath.MatchString(line) {
-			changed = true
-			// extract the value of the paramater or path name
-			paramSubmatch := reSSMPath.FindStringSubmatch(line)
-			if len(paramSubmatch) < 2 {
+		if loc := reSSMPath.FindStringSubmatchIndex(line); loc != nil { // returns [starting index of regex, end index of regex, start index of submatch, end index of submatch]
+			if len(loc) < 4 {
 				return nil, changed, errors.New(fmt.Sprintf("format error in line %s", line))
 			}
-
-			newLine, err := c.replaceWithSSMPath(line, paramSubmatch[1])
+			changed = true
+			newLine, err := c.replaceWithSSMPath(line, loc)
 			if err != nil {
 				return nil, changed, err
 			}
 			newValues = append(newValues, newLine)
-		} else if reSSM.MatchString(line) {
-			changed = true
-			paramSubmatch := reSSM.FindStringSubmatch(line)
-			if len(paramSubmatch) < 2 {
+		} else if loc := reSSM.FindStringSubmatchIndex(line); loc != nil {
+			if len(loc) < 4 {
 				return nil, changed, errors.New(fmt.Sprintf("format error in line %s", line))
 			}
-			newLine, err := c.replaceWithSSMParameter(line, paramSubmatch[1])
+			changed = true
+			newLine, err := c.replaceWithSSMParameter(line, loc)
 			if err != nil {
 				return nil, changed, err
 			}
@@ -182,7 +177,11 @@ func (c *controller) findAndReplace(values []string) ([]string, bool, error) {
 	return newValues, changed, nil
 }
 
-func (c *controller) replaceWithSSMParameter(line string, path string) (string, error) {
+func (c *controller) replaceWithSSMParameter(line string, locationMatch []int) (string, error) {
+	paramPath := line[locationMatch[2]:locationMatch[3]]
+	fmt.Println("line is", line)
+	fmt.Println("paramPath is", paramPath)
+
 	// if awsClient is not yet initialized, initialize it
 	if c.awsClient == nil {
 		if err := c.initializeAWSClient(); err != nil {
@@ -192,23 +191,24 @@ func (c *controller) replaceWithSSMParameter(line string, path string) (string, 
 
 	param, err := c.awsClient.GetParameter(
 		&ssm.GetParameterInput{
-			Name: &path,
+			Name: &paramPath,
 			WithDecryption: aws.Bool(true),
 		},
 	)
 	if err != nil {
-		return "", errors.Wrapf(err, "error getting paramater %s from AWS", path)
+		return "", errors.Wrapf(err, "error getting paramater %s from AWS", paramPath)
 	}
 	
-	line, err = constructReplacementLine(line, *param.Parameter.Value)
-	if err != nil {
-		return "", err
-	}
+	line = constructReplacementLine(line, locationMatch, *param.Parameter.Value)
 
 	return line, nil
 }
 
-func (c *controller) replaceWithSSMPath(line string, path string) (string, error) {
+func (c *controller) replaceWithSSMPath(line string, locationMatch []int) (string, error) {
+	paramPath := line[locationMatch[2]:locationMatch[3]]
+	fmt.Println("line is", line)
+	fmt.Println("paramPath is", paramPath)
+
 	if c.awsClient == nil {
 		if err := c.initializeAWSClient(); err != nil {
 			return "", errors.Wrap(err, "error initializing AWS client")
@@ -218,19 +218,19 @@ func (c *controller) replaceWithSSMPath(line string, path string) (string, error
 	params := map[string]string{}
 	if err := c.awsClient.GetParametersByPathPages(
 		&ssm.GetParametersByPathInput{
-			Path: &path,
+			Path: &paramPath,
 			Recursive: aws.Bool(true),
 			WithDecryption: aws.Bool(true),
 		},
 		func(page *ssm.GetParametersByPathOutput, lastPage bool) bool {
 			for _, param := range page.Parameters {
-				key := (*param.Name)[len(path)+1:] // trim out the path
+				key := (*param.Name)[len(paramPath)+1:] // trim out the path
 				params[key] = *param.Value
 			}
 			return true
 		},
 	); err != nil {
-		return "", errors.Wrapf(err, "error getting paramaters from path %s from AWS", path)
+		return "", errors.Wrapf(err, "error getting paramaters from path %s from AWS", paramPath)
 	}
 
 	paramDict, err := json.Marshal(params)
@@ -238,20 +238,12 @@ func (c *controller) replaceWithSSMPath(line string, path string) (string, error
 		return "", errors.Wrap(err, "error marshalling parameters into values")
 	}
 
-	line, err = constructReplacementLine(line, string(paramDict))
-	if err != nil {
-		return "", err
-	}
+	line = constructReplacementLine(line, locationMatch, string(paramDict))
 	return line, nil
 }
 
-func constructReplacementLine(line, newValue string) (string, error) {
-	// contruct the new line for the values file. keep everything until and including the colon
-	colon := strings.Index(line, ":")
-	if (colon == -1) {
-		return "", errors.New(fmt.Sprintf("format error in line %s", line))
-	}
-	return fmt.Sprintf("%s %s\n", line[:colon+1], newValue), nil
+func constructReplacementLine(line string, location []int, newValue string) string {
+	return line[:location[0]] + newValue + "\n"
 }
 
 func checkForInstall(args []string, index int) bool {
