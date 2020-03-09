@@ -1,6 +1,10 @@
+https://github.com/callrail/helm-ssm/workflows/Create%20Release/badge.svg
+https://github.com/callrail/helm-ssm/workflows/Autotag/badge.svg
+
 # helm-ssm
 A low-dependency tool used to retrieves and injects secrets from AWS SSM Parameter Store.
-Modified from: https://github.com/totango/helm-ssm
+
+Idea modified from: https://github.com/totango/helm-ssm
 
 
 ## Installation

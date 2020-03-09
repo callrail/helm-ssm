@@ -1,0 +1,47 @@
+name: Build and Release
+on:
+  push:
+    tags:
+      - v*
+
+jobs:
+  build:
+    name: Create release assets
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+      - name: Setup go
+        uses: actions/setup-go@v1
+        with:
+          go-version: '1.13.3'
+      - name: Build go binaries
+        run: ./build.sh
+      - name: Create release
+        id: create_release
+        uses: actions/create-release@latest
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ github.ref }} # TODO don't want branch name.
+          release_name: Release ${{ github.ref }}
+          draft: false
+          prerelease: true
+      - name: Upload release asset linux
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: helm-ssm-linux-amd64
+          asset_name: helm-ssm_${{ github.ref }}_linux_amd64
+          asset_content_type: application/octet-stream
+      - name: Upload release asset macOS
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: helm-ssm-darwin-amd64
+          asset_name: helm-ssm_${{ github.ref }}_darwin_amd64
+          asset_content_type: application/octet-stream
