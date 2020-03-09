@@ -1,12 +1,12 @@
 name: Build and Release
 on:
   push:
-    tags:
-      - v*
+    branches:
+      - master
 
 jobs:
   build:
-    name: Create release assets
+    name: Tag, Build, Release
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -17,14 +17,19 @@ jobs:
           go-version: '1.13.3'
       - name: Build go binaries
         run: ./build.sh
+      - name: Bump version and push tag
+        id: create_tag
+        uses: mathieudutour/github-tag-action@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
       - name: Create release
         id: create_release
         uses: actions/create-release@latest
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tag_name: ${{ github.ref }} # TODO don't want branch name.
-          release_name: Release ${{ github.ref }}
+          tag_name: ${{ steps.create_tag.outputs.new_tag }}
+          release_name: Release ${{ steps.create_tag.outputs.new_tag }}
           draft: false
           prerelease: true
       - name: Upload release asset linux
@@ -34,7 +39,7 @@ jobs:
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
           asset_path: helm-ssm-linux-amd64
-          asset_name: helm-ssm_${{ github.ref }}_linux_amd64
+          asset_name: helm-ssm_${{ steps.create_tag.outputs.new_tag }}_linux_amd64
           asset_content_type: application/octet-stream
       - name: Upload release asset macOS
         uses: actions/upload-release-asset@v1
@@ -43,5 +48,5 @@ jobs:
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
           asset_path: helm-ssm-darwin-amd64
-          asset_name: helm-ssm_${{ github.ref }}_darwin_amd64
+          asset_name: helm-ssm_${{ steps.create_tag.outputs.new_tag }}_darwin_amd64
           asset_content_type: application/octet-stream
