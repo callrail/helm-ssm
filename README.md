@@ -10,9 +10,6 @@ Idea modified from: https://github.com/totango/helm-ssm
 ```bash
 $ helm plugin install https://github.com/callrail/helm-ssm
 ```
-For username, enter your GitHub username.
-
-For password, enter your **Personal Access Token**. (You have probably created one already. See step #12 [here](https://github.com/callrail/setup).)
 
 ## Updating
 ```
@@ -28,7 +25,7 @@ mySecret: {{ssm <my-ssm-parameter-name>}}
 ```
 Then run your helm install/update command as usual but with `helm ssm` instead of just `helm`.
 
-**Note:** You will need to run your helm command using the credentials with access to SSM in the correct AWS account (staging/prod). To set up aws-vault, follow the instructions in the aws-vault section [here](https://callrail.atlassian.net/wiki/spaces/ENG/pages/888865061/AWS+Setup).
+**Note:** You will need to run your helm command using credentials with access to SSM in the AWS account in which the parameter lives.
 
 #### Multiple Parameters under a Single Path
 You can also include a map of key/value pairs by specifying a path that holds multiple parameters.

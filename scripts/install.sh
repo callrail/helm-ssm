@@ -24,11 +24,9 @@ arch=`uname -m`
 
 # set the url of the binary
 url="https://github.com/callrail/helm-ssm/releases/download/${version}/helm-ssm_${version}_${os}_${arch}"
-echo "url: $url"
 
 # set the filename
 filename=`echo ${url} | sed -e "s/^.*\///g"`
-echo "filename: $filename"
 
 # download the binary using curl or wget
 if [ -n $(command -v curl) ]
