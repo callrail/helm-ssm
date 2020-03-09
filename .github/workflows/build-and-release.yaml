@@ -38,8 +38,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: helm-ssm-linux-amd64
-          asset_name: helm-ssm_${{ steps.create_tag.outputs.new_tag }}_linux_amd64
+          asset_path: helm-ssm-Linux-x86_64
+          asset_name: helm-ssm_${{ steps.create_tag.outputs.new_tag }}_Linux_x86_64
           asset_content_type: application/octet-stream
       - name: Upload release asset macOS
         uses: actions/upload-release-asset@v1
@@ -47,6 +47,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: helm-ssm-darwin-amd64
-          asset_name: helm-ssm_${{ steps.create_tag.outputs.new_tag }}_darwin_amd64
+          asset_path: helm-ssm-Darwin-x86_64
+          asset_name: helm-ssm_${{ steps.create_tag.outputs.new_tag }}_Darwin_x86_64
           asset_content_type: application/octet-stream
