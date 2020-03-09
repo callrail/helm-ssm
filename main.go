@@ -179,8 +179,6 @@ func (c *controller) findAndReplace(values []string) ([]string, bool, error) {
 
 func (c *controller) replaceWithSSMParameter(line string, locationMatch []int) (string, error) {
 	paramPath := line[locationMatch[2]:locationMatch[3]]
-	fmt.Println("line is", line)
-	fmt.Println("paramPath is", paramPath)
 
 	// if awsClient is not yet initialized, initialize it
 	if c.awsClient == nil {
@@ -206,8 +204,6 @@ func (c *controller) replaceWithSSMParameter(line string, locationMatch []int) (
 
 func (c *controller) replaceWithSSMPath(line string, locationMatch []int) (string, error) {
 	paramPath := line[locationMatch[2]:locationMatch[3]]
-	fmt.Println("line is", line)
-	fmt.Println("paramPath is", paramPath)
 
 	if c.awsClient == nil {
 		if err := c.initializeAWSClient(); err != nil {

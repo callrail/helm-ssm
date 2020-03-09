@@ -3,6 +3,6 @@ image:
   tag: stable
   pullPolicy: IfNotPresent
 
-config: {{ssm-path /configmgmt/jessica_first_context}}
+config: {{ssm-path /jessica_first_context}}
 secret2: {{ssm jessica-secret}}
 

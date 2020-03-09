@@ -5,6 +5,6 @@ description: |-
   AWS SSM parameter injection in Helm value files
 useTunnel: true
 command: "$HELM_PLUGIN_DIR/bin/helm-ssm"
-#hooks:
-#  install: "cd $HELM_PLUGIN_DIR/; ./scripts/install.sh"
-#  update: "cd $HELM_PLUGIN_DIR/; ./scripts/install.sh"
+hooks:
+  install: "cd $HELM_PLUGIN_DIR/; ./scripts/install.sh"
+  update: "cd $HELM_PLUGIN_DIR/; ./scripts/install.sh"

@@ -1,10 +1,13 @@
-HELM_PLUGIN_DIR="/Users/jessicatracy/fake-helm-plugin-dur/" # TODO
-
+if [ -z "$HELM_PLUGIN_DIR" ]; then
+  echo "HELM_PLUGIN_DIR is not set"
+  exit 1
+fi
 # cd to the plugin dir
 cd $HELM_PLUGIN_DIR
 
 # get the version
 version="$(cat plugin.yaml | grep "version" | cut -d '"' -f 2)"
+version="v${version}"
 
 # find the OS and ARCH
 unameOut="$(uname -s)"
@@ -20,11 +23,6 @@ esac
 arch=`uname -m`
 
 # set the url of the binary
-#url="https://github.com/callrail/helm-ssm/releases/download/v${version}/helm-ssm${version}_${os}_${arch}"
-#url="https://github.com/callrail/helm-ssm/releases/download/v0.1.0/helm-ssm"
-#releases_url="https://api.github.com/repos/callrail/helm-ssm/releases" # gets all releases
-#url="https://api.github.com/repos/callrail/helm-ssm/releases/assets/18147422" # this is ID of my current asset but it's just json blob of it, not binary
-# ???
 url="https://github.com/callrail/helm-ssm/releases/download/${version}/helm-ssm_${version}_${os}_${arch}"
 echo "url: $url"
 
@@ -32,18 +30,17 @@ echo "url: $url"
 filename=`echo ${url} | sed -e "s/^.*\///g"`
 echo "filename: $filename"
 
-## download the binary using curl or wget
-#if [ -n $(command -v curl) ]
-#then
-#    curl -sSL -H "Authorization: token $GITHUB_TOKEN" -O $url
-#elif [ -n $(command -v wget) ]
-#then
-#    wget -q $url
-#    wget --header="Authorization: token $GITHUB_TOKEN"
-#else
-#    echo "Need curl or wget"
-#    exit -1
-#fi
-#
-## move binary into the bin dir
-#rm -rf bin && mkdir bin && mv $filename bin/helm-ssm && chmod +x bin/helm-ssm
+# download the binary using curl or wget
+if [ -n $(command -v curl) ]
+then
+    curl -sSL -O $url
+elif [ -n $(command -v wget) ]
+then
+    wget -q $url
+else
+    echo "Need curl or wget"
+    exit -1
+fi
+
+# move binary into the bin dir
+rm -rf bin && mkdir bin && mv $filename bin/helm-ssm && chmod +x bin/helm-ssm
