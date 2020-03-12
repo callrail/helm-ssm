@@ -1,7 +1,7 @@
 <a href="https://github.com/callrail/helm-ssm/actions"><img alt="GitHub Actions status" src="https://github.com/callrail/helm-ssm/workflows/Build%20and%20Release/badge.svg"></a>
 
 # helm-ssm
-A low-dependency tool used to retrieves and injects secrets from AWS SSM Parameter Store.
+A tool used to retrieve and inject secrets from AWS SSM Parameter Store into helm value files.
 
 Idea modified from: https://github.com/totango/helm-ssm
 
@@ -25,6 +25,10 @@ mySecret: {{ssm <my-ssm-parameter-name>}}
 ```
 Then run your helm install/update command as usual but with `helm ssm` instead of just `helm`.
 
+For example,
+```
+$ helm ssm install my-release my-chart -f my-values-file.yaml
+```
 **Note:** You will need to run your helm command using credentials with access to SSM in the AWS account in which the parameter lives.
 
 #### Multiple Parameters under a Single Path
@@ -46,6 +50,14 @@ myConfig: {secret-key-1: "value-1", secret-key-2: "value-2": secret-key-3: "valu
 ```
 
 ## Testing
+This testing setup assumes you have the following parameters in SSM:
+```
+test-secret-value: (value can be anything)
+/test-secret-group/value1: (value can be anything)
+/test-secret-group/value2: (value can be anything)
+...
+(as many as you want under the path /test-secret-group/)
+```
 ```
 $ go run main.go install testing ./tests/testchart/ -f tests/testchart/override-values.yaml --dry-run --debug
 ```
