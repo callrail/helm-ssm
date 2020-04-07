@@ -6,7 +6,8 @@ image:
 config: {{ssm-path /test-secret-group}}
 secret2: {{ssm test-secret-value}}
 
-nested-configs: {{ssm-path-prefix /test-secret-group-2/}}
- - config1
- - config2
+nestedConfigs: {{ssm-path-prefix /test-secret-group-2/}}
+- config1
+- config2
 {{end}}
+keepThisOne: okay

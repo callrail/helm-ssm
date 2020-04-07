@@ -153,7 +153,8 @@ func (c *controller) findAndReplace(values []string) ([]string, bool, error) {
 	reSSM := regexp.MustCompile(SSM_FORMAT)
 	reSSMPath := regexp.MustCompile(SSM_PATH_FORMAT)
 	reSSMPathPrefix := regexp.MustCompile(SSM_PATH_PREFIX_FORMAT)
-	for index, line := range values {
+	linesToDelete := []int{}
+	for i, line := range values {
 		// do ssm-path-prefix first
 		if loc := reSSMPathPrefix.FindStringSubmatchIndex(line); loc != nil {  // returns [starting index of regex, end index of regex, start index of submatch, end index of submatch]
 			if len(loc) < 4 {
@@ -161,9 +162,13 @@ func (c *controller) findAndReplace(values []string) ([]string, bool, error) {
 			}
 			changed = true
 			// in this case, we want to grab all subsequent lines until we see {{end}}
-			newLine, err := c.replaceWithSSMPathPrefix(line, loc, values[index+1:])
+			newLine, numLinesToDelete, err := c.replaceWithSSMPathPrefix(line, loc, values[i+1:])
 			if err != nil {
 				return nil, changed, err
+			}
+			// Mark the lines we need to delete after (up until {{end}}
+			for j := i + 1; j <= (i + numLinesToDelete); j++ {
+				linesToDelete = append(linesToDelete, j)
 			}
 			newValues = append(newValues, newLine)
 		} else if loc := reSSMPath.FindStringSubmatchIndex(line); loc != nil {
@@ -190,6 +195,12 @@ func (c *controller) findAndReplace(values []string) ([]string, bool, error) {
 			newValues = append(newValues, line)
 		}
 	}
+
+	// Delete out linesToDelete
+	for _, lineNumber := range linesToDelete {
+		newValues[lineNumber] = ""
+	}
+
 	return newValues, changed, nil
 }
 
@@ -254,25 +265,32 @@ func (c *controller) replaceWithSSMPath(line string, locationMatch []int) (strin
 	return line, nil
 }
 
-func (c *controller) replaceWithSSMPathPrefix(line string, locationMatch []int, values []string) (string, error) {
+// returns replacement line, number of lines to delete, and error
+func (c *controller) replaceWithSSMPathPrefix(line string, locationMatch []int, values []string) (string, int, error) {
 	prefix := line[locationMatch[2]:locationMatch[3]]
 	paramPaths := []string{}
 
 	// read in lines from values and grab paramPaths until we see {{end}}
-	for _, l := range values {
+	lineCount := 0
+	for i, l := range values {
+		lineCount = i+1
 		if match := regexp.MustCompile(LIST_ITEM_FORMAT).FindStringSubmatch(l); match != nil {
 			if (len(match) < 2) {
-				return "", errors.New(fmt.Sprintf("format error in line %s", l))
+				return "", 0, errors.New(fmt.Sprintf("format error in line %s", l))
 			}
 			paramPaths = append(paramPaths, fmt.Sprintf("%s%s", prefix, match[1]))
 		} else if regexp.MustCompile(END_FORMAT).Match([]byte(l)) {
 			break
 		}
+		// if we never receive an {{end}}, throw an error
+		if (i == (len(values) - 1)) {
+			return "", 0, errors.New("error: no {{end}} found")
+		}
 	}
 
 	if c.awsClient == nil {
 		if err := c.initializeAWSClient(); err != nil {
-			return "", errors.Wrap(err, "error initializing AWS client")
+			return "", 0, errors.Wrap(err, "error initializing AWS client")
 		}
 	}
 
@@ -292,17 +310,17 @@ func (c *controller) replaceWithSSMPathPrefix(line string, locationMatch []int, 
 				return true
 			},
 		); err != nil {
-			return "", errors.Wrapf(err, "error getting paramaters from path %s from AWS", paramPath)
+			return "", 0, errors.Wrapf(err, "error getting paramaters from path %s from AWS", paramPath)
 		}
 	}
 
 	paramDict, err := json.Marshal(params)
 	if err != nil {
-		return "", errors.Wrap(err, "error marshalling parameters into values")
+		return "", 0, errors.Wrap(err, "error marshalling parameters into values")
 	}
 
 	line = constructReplacementLine(line, locationMatch, string(paramDict))
-	return line, nil
+	return line, lineCount, nil
 }
 
 func constructReplacementLine(line string, location []int, newValue string) string {
