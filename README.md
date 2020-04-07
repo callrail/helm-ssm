@@ -55,6 +55,10 @@ This testing setup assumes you have the following parameters in SSM:
 test-secret-value: (value can be anything)
 /test-secret-group/value1: (value can be anything)
 /test-secret-group/value2: (value can be anything)
+/test-secret-group-2/config1/c1key1: (value can be anything)
+/test-secret-group-2/config2/c2key1: (value can be anything)
+/test-secret-group-2/config2/c2key2: (value can be anything)
+
 ...
 (as many as you want under the path /test-secret-group/)
 ```

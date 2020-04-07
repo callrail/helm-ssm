@@ -19,6 +19,9 @@ import (
 const (
 	SSM_FORMAT = `{{ssm\s+(\S+)\s?}}`
 	SSM_PATH_FORMAT = `{{ssm-path\s+(\S+)\s?}}`
+	SSM_PATH_PREFIX_FORMAT = `{{ssm-path-prefix\s+(\S+)\s?}}`
+	LIST_ITEM_FORMAT = `-\s(\S+)\n?$`
+	END_FORMAT = `{{\s?end\s?}}`
 )
 
 type controller struct {
@@ -149,8 +152,21 @@ func (c *controller) findAndReplace(values []string) ([]string, bool, error) {
 	var changed bool
 	reSSM := regexp.MustCompile(SSM_FORMAT)
 	reSSMPath := regexp.MustCompile(SSM_PATH_FORMAT)
-	for _, line := range values {
-		if loc := reSSMPath.FindStringSubmatchIndex(line); loc != nil { // returns [starting index of regex, end index of regex, start index of submatch, end index of submatch]
+	reSSMPathPrefix := regexp.MustCompile(SSM_PATH_PREFIX_FORMAT)
+	for index, line := range values {
+		// do ssm-path-prefix first
+		if loc := reSSMPathPrefix.FindStringSubmatchIndex(line); loc != nil {  // returns [starting index of regex, end index of regex, start index of submatch, end index of submatch]
+			if len(loc) < 4 {
+				return nil, changed, errors.New(fmt.Sprintf("format error in line %s", line))
+			}
+			changed = true
+			// in this case, we want to grab all subsequent lines until we see {{end}}
+			newLine, err := c.replaceWithSSMPathPrefix(line, loc, values[index+1:])
+			if err != nil {
+				return nil, changed, err
+			}
+			newValues = append(newValues, newLine)
+		} else if loc := reSSMPath.FindStringSubmatchIndex(line); loc != nil {
 			if len(loc) < 4 {
 				return nil, changed, errors.New(fmt.Sprintf("format error in line %s", line))
 			}
@@ -227,6 +243,57 @@ func (c *controller) replaceWithSSMPath(line string, locationMatch []int) (strin
 		},
 	); err != nil {
 		return "", errors.Wrapf(err, "error getting paramaters from path %s from AWS", paramPath)
+	}
+
+	paramDict, err := json.Marshal(params)
+	if err != nil {
+		return "", errors.Wrap(err, "error marshalling parameters into values")
+	}
+
+	line = constructReplacementLine(line, locationMatch, string(paramDict))
+	return line, nil
+}
+
+func (c *controller) replaceWithSSMPathPrefix(line string, locationMatch []int, values []string) (string, error) {
+	prefix := line[locationMatch[2]:locationMatch[3]]
+	paramPaths := []string{}
+
+	// read in lines from values and grab paramPaths until we see {{end}}
+	for _, l := range values {
+		if match := regexp.MustCompile(LIST_ITEM_FORMAT).FindStringSubmatch(l); match != nil {
+			if (len(match) < 2) {
+				return "", errors.New(fmt.Sprintf("format error in line %s", l))
+			}
+			paramPaths = append(paramPaths, fmt.Sprintf("%s%s", prefix, match[1]))
+		} else if regexp.MustCompile(END_FORMAT).Match([]byte(l)) {
+			break
+		}
+	}
+
+	if c.awsClient == nil {
+		if err := c.initializeAWSClient(); err != nil {
+			return "", errors.Wrap(err, "error initializing AWS client")
+		}
+	}
+
+	params := map[string]string{}
+	for _, paramPath := range paramPaths {
+		if err := c.awsClient.GetParametersByPathPages(
+			&ssm.GetParametersByPathInput{
+				Path: &paramPath,
+				Recursive: aws.Bool(true),
+				WithDecryption: aws.Bool(true),
+			},
+			func(page *ssm.GetParametersByPathOutput, lastPage bool) bool {
+				for _, param := range page.Parameters {
+					key := (*param.Name)[len(paramPath)+1:] // trim out the path
+					params[key] = *param.Value
+				}
+				return true
+			},
+		); err != nil {
+			return "", errors.Wrapf(err, "error getting paramaters from path %s from AWS", paramPath)
+		}
 	}
 
 	paramDict, err := json.Marshal(params)
