@@ -24,9 +24,11 @@ spec:
             {{- end }}
             - name: SECRET_2
               value: {{ .Values.secret2 | quote }}
-            {{- range $key, $value := .Values.nestedConfigs }}
+            {{- range .Values.nestedConfigs }}
+            {{- range $key, $value := . }}
             - name: {{ $key | upper }}
               value: {{ $value | quote }}
+            {{- end }}
             {{- end }}
             - name: SECRET_3
               value: {{ .Values.keepThisOne | quote }}

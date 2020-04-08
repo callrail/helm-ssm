@@ -20,8 +20,9 @@ const (
 	SSM_FORMAT = `{{ssm\s+(\S+)\s?}}`
 	SSM_PATH_FORMAT = `{{ssm-path\s+(\S+)\s?}}`
 	SSM_PATH_PREFIX_FORMAT = `{{ssm-path-prefix\s+(\S+)\s?}}`
-	LIST_ITEM_FORMAT = `-\s(\S+)\n?$`
-	END_FORMAT = `{{\s?end\s?}}`
+	LIST_ITEM_FORMAT = `^\s{0,}-\s(\S+)\n?$`
+	END_FORMAT = `^\s{0,}{{\s?end\s?}}`
+	COMMENT_FORMAT=`^\s{0,}#.*`
 )
 
 type controller struct {
@@ -139,7 +140,8 @@ func readLines(valueFile string) ([]string, error) {
 				return nil, err
 			}
 		}
-		if (line != "\n") {
+		// if the line is empty or commented out, don't add
+		if ((line != "\n") && !regexp.MustCompile(COMMENT_FORMAT).Match([]byte(line))) {
 			lines = append(lines, line)
 		}
 	}
@@ -294,8 +296,9 @@ func (c *controller) replaceWithSSMPathPrefix(line string, locationMatch []int, 
 		}
 	}
 
-	params := map[string]string{}
+	allParams := []map[string]string{}
 	for _, paramPath := range paramPaths {
+		params := map[string]string{}
 		if err := c.awsClient.GetParametersByPathPages(
 			&ssm.GetParametersByPathInput{
 				Path: &paramPath,
@@ -312,13 +315,15 @@ func (c *controller) replaceWithSSMPathPrefix(line string, locationMatch []int, 
 		); err != nil {
 			return "", 0, errors.Wrapf(err, "error getting paramaters from path %s from AWS", paramPath)
 		}
+		allParams = append(allParams, params)
 	}
 
-	paramDict, err := json.Marshal(params)
+	paramDict, err := json.Marshal(allParams)
 	if err != nil {
 		return "", 0, errors.Wrap(err, "error marshalling parameters into values")
 	}
 
+	
 	line = constructReplacementLine(line, locationMatch, string(paramDict))
 	return line, lineCount, nil
 }
