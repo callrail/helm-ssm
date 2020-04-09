@@ -17,7 +17,7 @@ $ helm plugin update ssm
 ```
 
 ## Usage
-In any **non-default** values file, replace values of secrets with ssm keywords `ssm` and `ssm-path` as shown below.
+In any **non-default** values file, replace values of secrets with ssm keywords `ssm`, `ssm-path`, and `ssm-path-prefix` as shown below.
 #### Single Parameter
 Replace a value-file value with a value from SSM Parameter Store:
 ```
@@ -49,12 +49,44 @@ myConfig: {{ssm-path /prod-config/example}}
 myConfig: {secret-key-1: "value-1", secret-key-2: "value-2": secret-key-3: "value-3"}
 ```
 
+#### Multiple Parameters under Multiple Paths sharing a common prefix
+Let's say I want to include multiple parameter paths that have a common prefix. For example,
+```
+/prod-config/prod_hosts/host_1_key => "secret-value"
+/prod-config/prod_hosts/host_2_key => "secret-value"
+
+/prod-config/api_tokens/app_1_token => "secret-value"
+/prod-config/api_tokens/app_2_token => "secret-value"
+/prod-config/api_tokens/app_3_token => "secret-value"
+
+/prod-config/database_urls/db_url => "secret-value"
+```
+Then the following values file will result in a list of dictionaries of the key/value pairs.
+```
+myConfig: {{ssm-path-prefix /prod-config/}}
+  - prod_hosts
+  - api_tokens
+  - database_urls
+{{end}}
+
+ => becomes =>
+
+myConfig:
+  - {host_1_key: "secret-value", host_2_key: "secret-value"}
+  - {app_1_token: "secret-value", app_2_token: "secret-value", app_3_token: "secret-value"}
+  - {db_url: "secret-value"}
+```
+
 ## Testing
 This testing setup assumes you have the following parameters in SSM:
 ```
 test-secret-value: (value can be anything)
 /test-secret-group/value1: (value can be anything)
 /test-secret-group/value2: (value can be anything)
+/test-secret-group-2/config1/c1key1: (value can be anything)
+/test-secret-group-2/config2/c2key1: (value can be anything)
+/test-secret-group-2/config2/c2key2: (value can be anything)
+
 ...
 (as many as you want under the path /test-secret-group/)
 ```
