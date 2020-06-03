@@ -1,0 +1,9 @@
+name: "calico"
+version: "0.1.0"
+usage: "TODO"
+description: "Template and apply calico network policies"
+useTunnel: true
+command: "$HELM_PLUGIN_DIR/bin/helm-calico"
+hooks:
+  install: "cd $HELM_PLUGIN_DIR/; ./scripts/install.sh" # TODO
+  update: "cd $HELM_PLUGIN_DIR/; ./scripts/install.sh"
