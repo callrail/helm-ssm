@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"regexp"
@@ -22,7 +21,7 @@ const (
 	SSM_PATH_PREFIX_FORMAT = `{{ssm-path-prefix\s+(\S+)\s?}}`
 	LIST_ITEM_FORMAT = `^\s{0,}-\s(\S+)\n?$`
 	END_FORMAT = `^\s{0,}{{\s?end\s?}}`
-	COMMENT_FORMAT=`^\s{0,}#.*`
+	COMMENT_FORMAT = `^\s{0,}#.*`
 )
 
 type controller struct {
@@ -156,21 +155,20 @@ func readLines(valueFile string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	reader := bufio.NewReader(file)
-	for {
-		line, err := reader.ReadString('\n')
-		if err != nil {
-			if err == io.EOF {
-				break
-			} else {
-				return nil, err
-			}
-		}
+
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		newLine := scanner.Text()
 		// if the line is empty or commented out, don't add
-		if ((line != "\n") && !regexp.MustCompile(COMMENT_FORMAT).Match([]byte(line))) {
-			lines = append(lines, line)
+		if ((newLine != "") && (newLine != "\n") && !regexp.MustCompile(COMMENT_FORMAT).Match([]byte(newLine))) {
+			lines = append(lines, newLine)
 		}
 	}
+
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+
 	return lines, nil
 }
 
@@ -376,8 +374,8 @@ func helmCommand(args []string) error {
 		fmt.Println("helm ssm usage:")
 		fmt.Println("\thelm ssm [command] [--keep-temp-values-file] [helm args...]")
 		fmt.Println("Flags:")
-		fmt.Println("\t--keep-temp-values-file\t\t\tIf true, don't clean up the temporary values file populated with ssm values from the current directory\n\n")
-		fmt.Println("Helm Usage:")
+		fmt.Println("\t--keep-temp-values-file\t\t\tIf true, don't clean up the temporary values file populated with ssm values from the current directory")
+		fmt.Println("\n\nHelm Usage:")
 	}
 	helmCmd := exec.Command("helm", args...)
 	out, err := helmCmd.CombinedOutput()
@@ -397,9 +395,11 @@ func (c *controller) helmCommandWithNewValues(values []string, args []string) er
 	}
 	writer := bufio.NewWriter(f)
 	for _, line := range values {
-		_, err := writer.WriteString(line)
-		if err != nil {
-			return errors.Wrap(err, "error writing temp values file")
+		if line != "" {
+			_, err := writer.WriteString(line + "\n")
+			if err != nil {
+				return errors.Wrap(err, "error writing temp values file")
+			}
 		}
 	}
 	writer.Flush()
