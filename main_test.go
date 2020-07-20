@@ -4,6 +4,83 @@ import (
 	"testing"
 )
 
+func TestPullNonHelmArgs(t *testing.T) {
+	testCases := []struct{
+		name         string
+		args         []string
+		expectedOpts options
+		expectedArgs []string
+	}{
+		{
+			name: "keep temp values file at end",
+			args: []string{
+				"--namespace",
+				"test",
+				"--dry-run",
+				"--keep-temp-values-file",
+			},
+			expectedOpts: options{keepTempValuesFile: true},
+			expectedArgs: []string{
+				"--namespace",
+				"test",
+				"--dry-run",
+			},
+		},
+		{
+			name: "keep temp values file in middle of args",
+			args: []string{
+				"--namespace",
+				"test",
+				"--keep-temp-values-file",
+				"--dry-run",
+				"-f",
+				"values.yaml",
+			},
+			expectedOpts: options{keepTempValuesFile: true},
+			expectedArgs: []string{
+				"--namespace",
+				"test",
+				"--dry-run",
+				"-f",
+				"values.yaml",
+			},
+		},
+		{
+			name: "no keep temp values file",
+			args: []string{
+				"--namespace",
+				"test",
+				"--dry-run",
+				"-f",
+				"values.yaml",
+			},
+			expectedOpts: options{keepTempValuesFile: false},
+			expectedArgs: []string{
+				"--namespace",
+				"test",
+				"--dry-run",
+				"-f",
+				"values.yaml",
+			},
+		},
+	}
+	for _, tc := range testCases {
+		tc := tc
+		t.Run(tc.name, func(subT *testing.T) {
+			c := &controller{
+				opts: options{keepTempValuesFile: false},
+			}
+			result := c.pullNonHelmArgs(tc.args)
+			if c.opts.keepTempValuesFile != tc.expectedOpts.keepTempValuesFile {
+				subT.Errorf("expected opts.keepTempValuesFile to be %v, got %v\n", tc.expectedOpts.keepTempValuesFile, c.opts.keepTempValuesFile)
+			}
+			if len(result) != len(tc.expectedArgs) {
+				subT.Errorf("expected %d returned args, got %d\n", len(tc.expectedArgs), len(result))
+			}
+		})
+	}
+}
+
 func TestPullValueFiles(t *testing.T) {
 	testCases := []struct {
 		name                   string
