@@ -27,11 +27,18 @@ const (
 
 type controller struct {
 	awsClient *ssm.SSM
+	opts      options
+}
+
+type options struct {
+	keepTempValuesFile bool
 }
 
 func main() {
 	args := os.Args[1:]
-	c := &controller{}
+	c := &controller{
+		opts: options{keepTempValuesFile: false},
+	}
 
 	// if the command is not "install" or "upgrade", or just a single command (no value files is a given in this case), pass the args to the regular helm command
 	var install bool
@@ -49,6 +56,8 @@ func main() {
 		}
 		os.Exit(0)
 	}
+
+	args = c.pullNonHelmArgs(args)
 
 	valueFiles, newArgs := pullValueFiles(args)
 	mergedValues, err := mergeValueFiles(valueFiles)
@@ -71,7 +80,7 @@ func main() {
 			os.Exit(1)
 		}
 	} else {
-		if err := helmCommandWithNewValues(newValues, newArgs); err != nil {
+		if err := c.helmCommandWithNewValues(newValues, newArgs); err != nil {
 			fmt.Println(err)
 			os.Exit(1)
 		}
@@ -89,6 +98,23 @@ func (c *controller) initializeAWSClient() error {
 	}
 	c.awsClient = ssm.New(sess)
 	return nil
+}
+
+func (c *controller) pullNonHelmArgs(args []string) []string {
+	index := -1
+	for i, arg := range args {
+		if arg == "--keep-temp-values-file" {
+			c.opts.keepTempValuesFile = true
+			index = i
+		}
+	}
+
+	if c.opts.keepTempValuesFile {
+		args[index] = args[len(args) - 1]
+		args = args[:len(args) - 1]
+	}
+
+	return args
 }
 
 func pullValueFiles(args []string) ([]string, []string) {
@@ -346,6 +372,13 @@ func checkForInstall(args []string, index int) bool {
 }
 
 func helmCommand(args []string) error {
+	if ((args[0] == "--help") || (args[0] == "-h")) {
+		fmt.Println("helm ssm usage:")
+		fmt.Println("\thelm ssm [command] [--keep-temp-values-file] [helm args...]")
+		fmt.Println("Flags:")
+		fmt.Println("\t--keep-temp-values-file\t\t\tIf true, don't clean up the temporary values file populated with ssm values from the current directory\n\n")
+		fmt.Println("Helm Usage:")
+	}
 	helmCmd := exec.Command("helm", args...)
 	out, err := helmCmd.CombinedOutput()
 	fmt.Println(string(out))
@@ -355,7 +388,7 @@ func helmCommand(args []string) error {
 	return nil
 }
 
-func helmCommandWithNewValues(values []string, args []string) error {
+func (c *controller) helmCommandWithNewValues(values []string, args []string) error {
 	tempFile := fmt.Sprintf("%s-temp-values.yaml", time.Now().Format("20060102150405"))
 
 	f, err := os.OpenFile(tempFile,os.O_APPEND|os.O_CREATE|os.O_WRONLY,0644)
@@ -374,14 +407,18 @@ func helmCommandWithNewValues(values []string, args []string) error {
 
 	args = append(args, "-f", tempFile)
 	if err = helmCommand(args); err != nil {
-		if deleteErr := os.Remove(tempFile); deleteErr != nil {
-			return errors.Wrapf(err, "error running helm command, and could not delete temp values file %s", tempFile)
+		if !c.opts.keepTempValuesFile {
+			if deleteErr := os.Remove(tempFile); deleteErr != nil {
+				return errors.Wrapf(err, "error running helm command, and could not delete temp values file %s", tempFile)
+			}
 		}
 		return err
 	}
 
-	if err := os.Remove(tempFile); err != nil {
-		return errors.Wrapf(err, "error deleting temp values file %s", tempFile)
+	if !c.opts.keepTempValuesFile {
+		if err := os.Remove(tempFile); err != nil {
+			return errors.Wrapf(err, "error deleting temp values file %s", tempFile)
+		}
 	}
 
 	return nil
