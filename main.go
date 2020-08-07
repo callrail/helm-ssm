@@ -34,6 +34,13 @@ type options struct {
 }
 
 func main() {
+	if err := run(); err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "%s\n", err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
 	args := os.Args[1:]
 	c := &controller{
 		opts: options{keepTempValuesFile: false},
@@ -50,10 +57,9 @@ func main() {
 	}
 	if !install {
 		if err := helmCommand(args); err != nil {
-			fmt.Println(err)
-			os.Exit(1)
+			return err
 		}
-		os.Exit(0)
+		return nil
 	}
 
 	args = c.pullNonHelmArgs(args)
@@ -61,29 +67,26 @@ func main() {
 	valueFiles, newArgs := pullValueFiles(args)
 	mergedValues, err := mergeValueFiles(valueFiles)
 	if err != nil {
-		fmt.Println(err)
-		os.Exit(1)
+		return err
 	}
 
 	// find the lines that match ssm keywords, go get the values, and replace them
 	newValues, changed, err := c.findAndReplace(mergedValues)
 	if err != nil {
-		fmt.Println(err)
-		os.Exit(1)
+		return err
 	}
 
 	// if there was nothing replaced, no need to write a new temp values file
 	if !changed {
 		if err := helmCommand(args); err != nil {
-			fmt.Println(err)
-			os.Exit(1)
+			return err
 		}
 	} else {
 		if err := c.helmCommandWithNewValues(newValues, newArgs); err != nil {
-			fmt.Println(err)
-			os.Exit(1)
+			return err
 		}
 	}
+	return nil
 }
 
 func (c *controller) initializeAWSClient() error {
@@ -379,10 +382,11 @@ func helmCommand(args []string) error {
 	}
 	helmCmd := exec.Command("helm", args...)
 	out, err := helmCmd.CombinedOutput()
-	fmt.Println(string(out))
 	if err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "%s\n", string(out))
 		return errors.Wrap(err, "error running helm command")
 	}
+	fmt.Println(string(out))
 	return nil
 }
 

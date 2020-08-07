@@ -1,5 +1,5 @@
 name: "ssm"
-version: "0.1.8"
+version: "0.1.9"
 usage: "AWS SSM parameter injection into Helm value files"
 description: |-
   AWS SSM parameter injection in Helm value files
