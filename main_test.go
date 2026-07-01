@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -128,6 +130,43 @@ func TestPullValueFiles(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestResolveValueFilesNoSSM(t *testing.T) {
+	// Multiple value files WITHOUT ssm directives must be handed to helm as
+	// separate `-f` flags in the original order (so helm does its native
+	// multi-file merge), with no temp files created. This is the core of the
+	// fix: previously they were concatenated into one temp file. Files with no
+	// ssm directives take the changed==false branch, so this exercises the new
+	// wiring without needing AWS or a real helm binary.
+	dir := t.TempDir()
+	base := filepath.Join(dir, "base.yaml")
+	local := filepath.Join(dir, "local.yaml")
+	if err := os.WriteFile(base, []byte("chassis:\n  utilDeployments: []\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(local, []byte("chassis:\n  extra: true\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	c := &controller{opts: options{}}
+	baseArgs := []string{"upgrade", "release", "my/chart", "-n", "ns"}
+	helmArgs, tempFiles, err := c.resolveValueFiles([]string{base, local}, baseArgs)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(tempFiles) != 0 {
+		t.Errorf("expected no temp files for non-ssm inputs, got %v", tempFiles)
+	}
+	expected := []string{"upgrade", "release", "my/chart", "-n", "ns", "-f", base, "-f", local}
+	if len(helmArgs) != len(expected) {
+		t.Fatalf("expected %d args, got %d: %v", len(expected), len(helmArgs), helmArgs)
+	}
+	for i := range expected {
+		if helmArgs[i] != expected[i] {
+			t.Errorf("arg %d: expected %q, got %q", i, expected[i], helmArgs[i])
+		}
 	}
 }
 

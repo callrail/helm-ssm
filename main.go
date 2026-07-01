@@ -65,28 +65,27 @@ func run() error {
 	args = c.pullNonHelmArgs(args)
 
 	valueFiles, newArgs := pullValueFiles(args)
-	mergedValues, err := mergeValueFiles(valueFiles)
+
+	// Resolve SSM directives in EACH value file independently and hand helm one
+	// `-f` per file, preserving the original order, so helm performs its native
+	// multi-file merge (deep-merge maps, later file wins) across all of them.
+	//
+	// Previously every value file was concatenated into a single temp file
+	// before helm saw it, collapsing multiple files into one YAML document with
+	// duplicate top-level keys — so a later file silently clobbered earlier ones
+	// instead of merging. Files without SSM directives are passed through by
+	// their original path (no temp file created).
+	helmArgs, tempFiles, err := c.resolveValueFiles(valueFiles, newArgs)
 	if err != nil {
+		cleanupTempFiles(tempFiles)
 		return err
 	}
 
-	// find the lines that match ssm keywords, go get the values, and replace them
-	newValues, changed, err := c.findAndReplace(mergedValues)
-	if err != nil {
-		return err
+	err = helmCommand(helmArgs)
+	if !c.opts.keepTempValuesFile {
+		cleanupTempFiles(tempFiles)
 	}
-
-	// if there was nothing replaced, no need to write a new temp values file
-	if !changed {
-		if err := helmCommand(args); err != nil {
-			return err
-		}
-	} else {
-		if err := c.helmCommandWithNewValues(newValues, newArgs); err != nil {
-			return err
-		}
-	}
-	return nil
+	return err
 }
 
 func (c *controller) initializeAWSClient() error {
@@ -139,16 +138,37 @@ func pullValueFiles(args []string) ([]string, []string) {
 	return valueFiles, newArgs
 }
 
-func mergeValueFiles(valueFiles []string) ([]string, error) {
-	mergedValues := []string{}
-	for _, valueFile := range valueFiles {
+// resolveValueFiles processes each value file independently: it resolves any SSM
+// directives in the file (writing the resolved result to its own temp file) and
+// appends a `-f <file>` for it to helmArgs. The original order is preserved so
+// helm's native multi-file merge precedence (later file wins) is respected.
+// Files without SSM directives are passed through by their original path with no
+// temp file created. Returns the assembled helm args and the temp files created
+// (for cleanup — also returned on error so the caller can clean up partial work).
+func (c *controller) resolveValueFiles(valueFiles, baseArgs []string) ([]string, []string, error) {
+	helmArgs := baseArgs
+	tempFiles := []string{}
+	for i, valueFile := range valueFiles {
 		lines, err := readLines(valueFile)
 		if err != nil {
-			return nil, errors.Wrapf(err, "error reading value file %s", valueFile)
+			return nil, tempFiles, errors.Wrapf(err, "error reading value file %s", valueFile)
 		}
-		mergedValues = append(mergedValues, lines...)
+		newValues, changed, err := c.findAndReplace(lines)
+		if err != nil {
+			return nil, tempFiles, err
+		}
+		if changed {
+			tempFile, err := writeTempValuesFile(newValues, i)
+			if err != nil {
+				return nil, tempFiles, err
+			}
+			tempFiles = append(tempFiles, tempFile)
+			helmArgs = append(helmArgs, "-f", tempFile)
+		} else {
+			helmArgs = append(helmArgs, "-f", valueFile)
+		}
 	}
-	return mergedValues, nil
+	return helmArgs, tempFiles, nil
 }
 
 func readLines(valueFile string) ([]string, error) {
@@ -390,40 +410,39 @@ func helmCommand(args []string) error {
 	return nil
 }
 
-func (c *controller) helmCommandWithNewValues(values []string, args []string) error {
-	tempFile := fmt.Sprintf("%s-temp-values.yaml", time.Now().Format("20060102150405"))
+// writeTempValuesFile writes resolved value lines to a uniquely-named temp file
+// in the current working directory and returns its path. The idx suffix keeps
+// names unique when several files are written within the same second (the
+// timestamp alone is 1s granularity). The `-temp-values.yaml` suffix is retained
+// so existing cleanup globs (helm_deploy.sh, .gitignore) keep matching.
+func writeTempValuesFile(values []string, idx int) (string, error) {
+	tempFile := fmt.Sprintf("%s-%d-temp-values.yaml", time.Now().Format("20060102150405"), idx)
 
-	f, err := os.OpenFile(tempFile,os.O_APPEND|os.O_CREATE|os.O_WRONLY,0644)
+	f, err := os.OpenFile(tempFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
-		return errors.Wrap(err, "error writing temp values file")
+		return "", errors.Wrap(err, "error writing temp values file")
 	}
 	writer := bufio.NewWriter(f)
 	for _, line := range values {
 		if line != "" {
-			_, err := writer.WriteString(line + "\n")
-			if err != nil {
-				return errors.Wrap(err, "error writing temp values file")
+			if _, err := writer.WriteString(line + "\n"); err != nil {
+				f.Close()
+				return "", errors.Wrap(err, "error writing temp values file")
 			}
 		}
 	}
 	writer.Flush()
 	f.Close()
 
-	args = append(args, "-f", tempFile)
-	if err = helmCommand(args); err != nil {
-		if !c.opts.keepTempValuesFile {
-			if deleteErr := os.Remove(tempFile); deleteErr != nil {
-				return errors.Wrapf(err, "error running helm command, and could not delete temp values file %s", tempFile)
-			}
-		}
-		return err
-	}
+	return tempFile, nil
+}
 
-	if !c.opts.keepTempValuesFile {
-		if err := os.Remove(tempFile); err != nil {
-			return errors.Wrapf(err, "error deleting temp values file %s", tempFile)
-		}
+// cleanupTempFiles removes the temp value files created during resolution.
+// Best-effort: a leftover temp file is harmless (it's gitignored, and
+// helm_deploy.sh also sweeps `*-temp-values.yaml`), so removal errors are not
+// treated as fatal.
+func cleanupTempFiles(tempFiles []string) {
+	for _, tempFile := range tempFiles {
+		_ = os.Remove(tempFile)
 	}
-
-	return nil
 }

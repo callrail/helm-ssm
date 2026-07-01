@@ -77,6 +77,25 @@ myConfig:
   - {db_url: "secret-value"}
 ```
 
+## Multiple value files
+You can pass more than one `-f`/`--values` file and they merge exactly as they do
+with plain `helm` — helm deep-merges the files in order, with **later files winning**
+on conflicts (and all of them layered on top of the chart's default `values.yaml`).
+SSM directives are resolved in each file independently before helm sees them, so you
+can freely mix files that use `ssm`/`ssm-path`/`ssm-path-prefix` with plain override
+files.
+
+```
+$ helm ssm upgrade my-release my-chart -f base-values.yaml -f overrides.yaml
+```
+Here `overrides.yaml` is layered on top of `base-values.yaml`.
+
+> **Note:** earlier versions concatenated multiple value files into a single file
+> before handing it to helm, which collapsed them into one document with duplicate
+> top-level keys — so a later file would silently clobber earlier ones instead of
+> merging. Each `-f` file is now resolved and passed to helm separately, so helm's
+> native multi-file merge applies.
+
 ## Testing
 This testing setup assumes you have the following parameters in SSM:
 ```
