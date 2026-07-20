@@ -2,21 +2,43 @@ name: Build and Release
 on:
   push:
     branches:
-      - master
+      - '**'
 
 jobs:
   build:
-    name: Tag, Build, Release
+    name: Build and Test
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
       - name: Setup go
-        uses: actions/setup-go@v1
+        uses: actions/setup-go@v5
         with:
-          go-version: '1.16.3'
+          go-version: '1.26'
       - name: Unit test and build go binaries
         run: ./build.sh
+      - name: Upload binaries
+        if: github.ref == 'refs/heads/master'
+        uses: actions/upload-artifact@v4
+        with:
+          name: helm-ssm-binaries
+          path: |
+            helm-ssm-Linux-x86_64
+            helm-ssm-Darwin-x86_64
+            helm-ssm-Darwin-arm64
+
+  release:
+    name: Tag and Release
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Download binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: helm-ssm-binaries
       - name: Bump version and push tag
         id: create_tag
         uses: mathieudutour/github-tag-action@v4

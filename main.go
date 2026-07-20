@@ -2,16 +2,17 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"regexp"
 	"time"
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/credentials/stscreds"
-	"github.com/aws/aws-sdk-go/aws/session"
-	"github.com/aws/aws-sdk-go/service/ssm"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/credentials/stscreds"
+	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	"github.com/pkg/errors"
 )
 
@@ -25,7 +26,7 @@ const (
 )
 
 type controller struct {
-	awsClient *ssm.SSM
+	awsClient *ssm.Client
 	opts      options
 }
 
@@ -89,15 +90,15 @@ func run() error {
 }
 
 func (c *controller) initializeAWSClient() error {
-	sess, err := session.NewSessionWithOptions(session.Options{
-		AssumeRoleTokenProvider: stscreds.StdinTokenProvider,
-		SharedConfigState: session.SharedConfigEnable,
-		Config: aws.Config{},
-	})
+	cfg, err := config.LoadDefaultConfig(context.Background(),
+		config.WithAssumeRoleCredentialOptions(func(o *stscreds.AssumeRoleOptions) {
+			o.TokenProvider = stscreds.StdinTokenProvider
+		}),
+	)
 	if err != nil {
 		return err
 	}
-	c.awsClient = ssm.New(sess)
+	c.awsClient = ssm.NewFromConfig(cfg)
 	return nil
 }
 
@@ -264,6 +265,7 @@ func (c *controller) replaceWithSSMParameter(line string, locationMatch []int) (
 	}
 
 	param, err := c.awsClient.GetParameter(
+		context.Background(),
 		&ssm.GetParameterInput{
 			Name: &paramPath,
 			WithDecryption: aws.Bool(true),
@@ -287,21 +289,8 @@ func (c *controller) replaceWithSSMPath(line string, locationMatch []int) (strin
 		}
 	}
 
-	params := map[string]string{}
-	if err := c.awsClient.GetParametersByPathPages(
-		&ssm.GetParametersByPathInput{
-			Path: &paramPath,
-			Recursive: aws.Bool(true),
-			WithDecryption: aws.Bool(true),
-		},
-		func(page *ssm.GetParametersByPathOutput, lastPage bool) bool {
-			for _, param := range page.Parameters {
-				key := (*param.Name)[len(paramPath)+1:] // trim out the path
-				params[key] = *param.Value
-			}
-			return true
-		},
-	); err != nil {
+	params, err := c.getParametersByPath(paramPath)
+	if err != nil {
 		return "", errors.Wrapf(err, "error getting paramaters from path %s from AWS", paramPath)
 	}
 
@@ -312,6 +301,28 @@ func (c *controller) replaceWithSSMPath(line string, locationMatch []int) (strin
 
 	line = constructReplacementLine(line, locationMatch, string(paramDict))
 	return line, nil
+}
+
+// getParametersByPath fetches every parameter under paramPath (recursively, decrypted),
+// paging through results, and returns them keyed by their name with paramPath trimmed off.
+func (c *controller) getParametersByPath(paramPath string) (map[string]string, error) {
+	params := map[string]string{}
+	paginator := ssm.NewGetParametersByPathPaginator(c.awsClient, &ssm.GetParametersByPathInput{
+		Path: &paramPath,
+		Recursive: aws.Bool(true),
+		WithDecryption: aws.Bool(true),
+	})
+	for paginator.HasMorePages() {
+		page, err := paginator.NextPage(context.Background())
+		if err != nil {
+			return nil, err
+		}
+		for _, param := range page.Parameters {
+			key := (*param.Name)[len(paramPath)+1:] // trim out the path
+			params[key] = *param.Value
+		}
+	}
+	return params, nil
 }
 
 // returns replacement line, number of lines to delete, and error
@@ -345,21 +356,8 @@ func (c *controller) replaceWithSSMPathPrefix(line string, locationMatch []int, 
 
 	allParams := []map[string]string{}
 	for _, paramPath := range paramPaths {
-		params := map[string]string{}
-		if err := c.awsClient.GetParametersByPathPages(
-			&ssm.GetParametersByPathInput{
-				Path: &paramPath,
-				Recursive: aws.Bool(true),
-				WithDecryption: aws.Bool(true),
-			},
-			func(page *ssm.GetParametersByPathOutput, lastPage bool) bool {
-				for _, param := range page.Parameters {
-					key := (*param.Name)[len(paramPath)+1:] // trim out the path
-					params[key] = *param.Value
-				}
-				return true
-			},
-		); err != nil {
+		params, err := c.getParametersByPath(paramPath)
+		if err != nil {
 			return "", 0, errors.Wrapf(err, "error getting paramaters from path %s from AWS", paramPath)
 		}
 		allParams = append(allParams, params)
