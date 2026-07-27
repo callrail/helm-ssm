@@ -2,16 +2,17 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"regexp"
 	"time"
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/credentials/stscreds"
-	"github.com/aws/aws-sdk-go/aws/session"
-	"github.com/aws/aws-sdk-go/service/ssm"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/credentials/stscreds"
+	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	"github.com/pkg/errors"
 )
 
@@ -25,7 +26,7 @@ const (
 )
 
 type controller struct {
-	awsClient *ssm.SSM
+	awsClient *ssm.Client
 	opts      options
 }
 
@@ -65,40 +66,33 @@ func run() error {
 	args = c.pullNonHelmArgs(args)
 
 	valueFiles, newArgs := pullValueFiles(args)
-	mergedValues, err := mergeValueFiles(valueFiles)
+
+	// Resolve SSM directives in EACH value file independently and hand helm one
+	// `-f` per file, preserving the original order, so helm performs its native
+	// multi-file merge (deep-merge maps, later file wins) across all of them.
+	helmArgs, tempFiles, err := c.resolveValueFiles(valueFiles, newArgs)
 	if err != nil {
+		cleanupTempFiles(tempFiles)
 		return err
 	}
 
-	// find the lines that match ssm keywords, go get the values, and replace them
-	newValues, changed, err := c.findAndReplace(mergedValues)
-	if err != nil {
-		return err
+	err = helmCommand(helmArgs)
+	if !c.opts.keepTempValuesFile {
+		cleanupTempFiles(tempFiles)
 	}
-
-	// if there was nothing replaced, no need to write a new temp values file
-	if !changed {
-		if err := helmCommand(args); err != nil {
-			return err
-		}
-	} else {
-		if err := c.helmCommandWithNewValues(newValues, newArgs); err != nil {
-			return err
-		}
-	}
-	return nil
+	return err
 }
 
 func (c *controller) initializeAWSClient() error {
-	sess, err := session.NewSessionWithOptions(session.Options{
-		AssumeRoleTokenProvider: stscreds.StdinTokenProvider,
-		SharedConfigState: session.SharedConfigEnable,
-		Config: aws.Config{},
-	})
+	cfg, err := config.LoadDefaultConfig(context.Background(),
+		config.WithAssumeRoleCredentialOptions(func(o *stscreds.AssumeRoleOptions) {
+			o.TokenProvider = stscreds.StdinTokenProvider
+		}),
+	)
 	if err != nil {
 		return err
 	}
-	c.awsClient = ssm.New(sess)
+	c.awsClient = ssm.NewFromConfig(cfg)
 	return nil
 }
 
@@ -139,16 +133,34 @@ func pullValueFiles(args []string) ([]string, []string) {
 	return valueFiles, newArgs
 }
 
-func mergeValueFiles(valueFiles []string) ([]string, error) {
-	mergedValues := []string{}
-	for _, valueFile := range valueFiles {
+// resolveValueFiles resolves SSM directives in each value file independently and
+// appends one `-f` per file to helmArgs — a temp file if anything was replaced,
+// the original path otherwise. Order is preserved so helm's multi-file merge
+// precedence (later file wins) holds. Temp files are returned for cleanup, even on error.
+func (c *controller) resolveValueFiles(valueFiles, baseArgs []string) ([]string, []string, error) {
+	helmArgs := baseArgs
+	tempFiles := []string{}
+	for i, valueFile := range valueFiles {
 		lines, err := readLines(valueFile)
 		if err != nil {
-			return nil, errors.Wrapf(err, "error reading value file %s", valueFile)
+			return nil, tempFiles, errors.Wrapf(err, "error reading value file %s", valueFile)
 		}
-		mergedValues = append(mergedValues, lines...)
+		newValues, changed, err := c.findAndReplace(lines)
+		if err != nil {
+			return nil, tempFiles, err
+		}
+		if changed {
+			tempFile, err := writeTempValuesFile(newValues, i)
+			if err != nil {
+				return nil, tempFiles, err
+			}
+			tempFiles = append(tempFiles, tempFile)
+			helmArgs = append(helmArgs, "-f", tempFile)
+		} else {
+			helmArgs = append(helmArgs, "-f", valueFile)
+		}
 	}
-	return mergedValues, nil
+	return helmArgs, tempFiles, nil
 }
 
 func readLines(valueFile string) ([]string, error) {
@@ -244,6 +256,7 @@ func (c *controller) replaceWithSSMParameter(line string, locationMatch []int) (
 	}
 
 	param, err := c.awsClient.GetParameter(
+		context.Background(),
 		&ssm.GetParameterInput{
 			Name: &paramPath,
 			WithDecryption: aws.Bool(true),
@@ -267,21 +280,8 @@ func (c *controller) replaceWithSSMPath(line string, locationMatch []int) (strin
 		}
 	}
 
-	params := map[string]string{}
-	if err := c.awsClient.GetParametersByPathPages(
-		&ssm.GetParametersByPathInput{
-			Path: &paramPath,
-			Recursive: aws.Bool(true),
-			WithDecryption: aws.Bool(true),
-		},
-		func(page *ssm.GetParametersByPathOutput, lastPage bool) bool {
-			for _, param := range page.Parameters {
-				key := (*param.Name)[len(paramPath)+1:] // trim out the path
-				params[key] = *param.Value
-			}
-			return true
-		},
-	); err != nil {
+	params, err := c.getParametersByPath(paramPath)
+	if err != nil {
 		return "", errors.Wrapf(err, "error getting paramaters from path %s from AWS", paramPath)
 	}
 
@@ -292,6 +292,28 @@ func (c *controller) replaceWithSSMPath(line string, locationMatch []int) (strin
 
 	line = constructReplacementLine(line, locationMatch, string(paramDict))
 	return line, nil
+}
+
+// getParametersByPath fetches every parameter under paramPath (recursively, decrypted),
+// paging through results, and returns them keyed by their name with paramPath trimmed off.
+func (c *controller) getParametersByPath(paramPath string) (map[string]string, error) {
+	params := map[string]string{}
+	paginator := ssm.NewGetParametersByPathPaginator(c.awsClient, &ssm.GetParametersByPathInput{
+		Path: &paramPath,
+		Recursive: aws.Bool(true),
+		WithDecryption: aws.Bool(true),
+	})
+	for paginator.HasMorePages() {
+		page, err := paginator.NextPage(context.Background())
+		if err != nil {
+			return nil, err
+		}
+		for _, param := range page.Parameters {
+			key := (*param.Name)[len(paramPath)+1:] // trim out the path
+			params[key] = *param.Value
+		}
+	}
+	return params, nil
 }
 
 // returns replacement line, number of lines to delete, and error
@@ -325,21 +347,8 @@ func (c *controller) replaceWithSSMPathPrefix(line string, locationMatch []int, 
 
 	allParams := []map[string]string{}
 	for _, paramPath := range paramPaths {
-		params := map[string]string{}
-		if err := c.awsClient.GetParametersByPathPages(
-			&ssm.GetParametersByPathInput{
-				Path: &paramPath,
-				Recursive: aws.Bool(true),
-				WithDecryption: aws.Bool(true),
-			},
-			func(page *ssm.GetParametersByPathOutput, lastPage bool) bool {
-				for _, param := range page.Parameters {
-					key := (*param.Name)[len(paramPath)+1:] // trim out the path
-					params[key] = *param.Value
-				}
-				return true
-			},
-		); err != nil {
+		params, err := c.getParametersByPath(paramPath)
+		if err != nil {
 			return "", 0, errors.Wrapf(err, "error getting paramaters from path %s from AWS", paramPath)
 		}
 		allParams = append(allParams, params)
@@ -390,40 +399,39 @@ func helmCommand(args []string) error {
 	return nil
 }
 
-func (c *controller) helmCommandWithNewValues(values []string, args []string) error {
-	tempFile := fmt.Sprintf("%s-temp-values.yaml", time.Now().Format("20060102150405"))
+// writeTempValuesFile writes resolved value lines to a uniquely-named temp file
+// in the current working directory and returns its path. The idx suffix keeps
+// names unique when several files are written within the same second (the
+// timestamp alone is 1s granularity). The `-temp-values.yaml` suffix is retained
+// so existing cleanup globs (helm_deploy.sh, .gitignore) keep matching.
+func writeTempValuesFile(values []string, idx int) (string, error) {
+	tempFile := fmt.Sprintf("%s-%d-temp-values.yaml", time.Now().Format("20060102150405"), idx)
 
-	f, err := os.OpenFile(tempFile,os.O_APPEND|os.O_CREATE|os.O_WRONLY,0644)
+	f, err := os.OpenFile(tempFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
-		return errors.Wrap(err, "error writing temp values file")
+		return "", errors.Wrap(err, "error writing temp values file")
 	}
 	writer := bufio.NewWriter(f)
 	for _, line := range values {
 		if line != "" {
-			_, err := writer.WriteString(line + "\n")
-			if err != nil {
-				return errors.Wrap(err, "error writing temp values file")
+			if _, err := writer.WriteString(line + "\n"); err != nil {
+				f.Close()
+				return "", errors.Wrap(err, "error writing temp values file")
 			}
 		}
 	}
 	writer.Flush()
 	f.Close()
 
-	args = append(args, "-f", tempFile)
-	if err = helmCommand(args); err != nil {
-		if !c.opts.keepTempValuesFile {
-			if deleteErr := os.Remove(tempFile); deleteErr != nil {
-				return errors.Wrapf(err, "error running helm command, and could not delete temp values file %s", tempFile)
-			}
-		}
-		return err
-	}
+	return tempFile, nil
+}
 
-	if !c.opts.keepTempValuesFile {
-		if err := os.Remove(tempFile); err != nil {
-			return errors.Wrapf(err, "error deleting temp values file %s", tempFile)
-		}
+// cleanupTempFiles removes the temp value files created during resolution.
+// Best-effort: a leftover temp file is harmless (it's gitignored, and
+// helm_deploy.sh also sweeps `*-temp-values.yaml`), so removal errors are not
+// treated as fatal.
+func cleanupTempFiles(tempFiles []string) {
+	for _, tempFile := range tempFiles {
+		_ = os.Remove(tempFile)
 	}
-
-	return nil
 }
