@@ -70,12 +70,6 @@ func run() error {
 	// Resolve SSM directives in EACH value file independently and hand helm one
 	// `-f` per file, preserving the original order, so helm performs its native
 	// multi-file merge (deep-merge maps, later file wins) across all of them.
-	//
-	// Previously every value file was concatenated into a single temp file
-	// before helm saw it, collapsing multiple files into one YAML document with
-	// duplicate top-level keys — so a later file silently clobbered earlier ones
-	// instead of merging. Files without SSM directives are passed through by
-	// their original path (no temp file created).
 	helmArgs, tempFiles, err := c.resolveValueFiles(valueFiles, newArgs)
 	if err != nil {
 		cleanupTempFiles(tempFiles)
@@ -139,13 +133,10 @@ func pullValueFiles(args []string) ([]string, []string) {
 	return valueFiles, newArgs
 }
 
-// resolveValueFiles processes each value file independently: it resolves any SSM
-// directives in the file (writing the resolved result to its own temp file) and
-// appends a `-f <file>` for it to helmArgs. The original order is preserved so
-// helm's native multi-file merge precedence (later file wins) is respected.
-// Files without SSM directives are passed through by their original path with no
-// temp file created. Returns the assembled helm args and the temp files created
-// (for cleanup — also returned on error so the caller can clean up partial work).
+// resolveValueFiles resolves SSM directives in each value file independently and
+// appends one `-f` per file to helmArgs — a temp file if anything was replaced,
+// the original path otherwise. Order is preserved so helm's multi-file merge
+// precedence (later file wins) holds. Temp files are returned for cleanup, even on error.
 func (c *controller) resolveValueFiles(valueFiles, baseArgs []string) ([]string, []string, error) {
 	helmArgs := baseArgs
 	tempFiles := []string{}
